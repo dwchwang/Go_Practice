@@ -14,15 +14,19 @@ import (
 type OrderService struct {
 	rdb         *redis.Client
 	cartService *CartService
+	leaderboardService *LeaderboardService // order thanh cong -> cong diem
+
 }
 
 func NewOrderService(
 	rdb *redis.Client,
 	cartService *CartService,
+	leaderboardService *LeaderboardService,
 ) *OrderService {
 	return &OrderService{
 		rdb:         rdb,
 		cartService: cartService,
+		leaderboardService: leaderboardService,
 	}
 }
 
@@ -100,6 +104,11 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID string) (*model.O
 	if err := s.rdb.Del(ctx, cartKey).Err(); err != nil {
 		return nil, err
 	}
+
+	// cong 10 diem cho nguoi dung moi khi order thanh cong
+	if err := s.leaderboardService.AddScore(ctx, userID, 10); err != nil {
+	return nil, err
+}
 
 	// return order
 	order := &model.Order{

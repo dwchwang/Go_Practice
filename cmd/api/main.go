@@ -35,10 +35,12 @@ func main() {
 
 	cartService := service.NewCartService(rdb)
 	cartHandler := handler.NewCartHandler(cartService)
-	
-	orderService := service.NewOrderService(rdb, cartService)
-	orderHandler := handler.NewOrderHandler(orderService)
 
+	leaderboardService := service.NewLeaderboardService(rdb)
+	leaderboardHandler := handler.NewLeaderboardHandler(leaderboardService)
+
+	orderService := service.NewOrderService(rdb, cartService, leaderboardService)
+	orderHandler := handler.NewOrderHandler(orderService)
 	// routes
 	r.POST("/auth/login", authHandler.Login)
 
@@ -62,6 +64,9 @@ func main() {
 	protected.GET("/cart", cartHandler.GetCart)
 
 	protected.POST("/order", orderHandler.CreateOrder)
+
+	protected.POST("/leaderboard/add", leaderboardHandler.AddScore) // test thu cong
+	protected.GET("/leaderboard", leaderboardHandler.GetLeaderboard)
 
 	// ping
 	r.GET("/ping", func(c *gin.Context) {
