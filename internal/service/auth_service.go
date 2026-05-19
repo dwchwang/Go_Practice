@@ -51,7 +51,7 @@ func (s *AuthService) Login(ctx context.Context,email, password string,) (string
 		"name": user.Name,
 	})
 	// 2. expire sessionKey
-	pipe.Expire(ctx,sessionKey, 30*time.Minute)
+	pipe.Expire(ctx,sessionKey, 60*time.Minute)
 
 	// 3. SADD userSessionKey sessionID
 	pipe.SAdd(ctx, userSessionKey, sessionID)

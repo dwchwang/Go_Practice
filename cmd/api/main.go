@@ -39,7 +39,9 @@ func main() {
 	leaderboardService := service.NewLeaderboardService(rdb)
 	leaderboardHandler := handler.NewLeaderboardHandler(leaderboardService)
 
-	orderService := service.NewOrderService(rdb, cartService, leaderboardService)
+	notificationService := service.NewNotificationService(rdb)
+
+	orderService := service.NewOrderService(rdb, cartService, leaderboardService, notificationService)
 	orderHandler := handler.NewOrderHandler(orderService)
 	// routes
 	r.POST("/auth/login", authHandler.Login)
@@ -67,6 +69,9 @@ func main() {
 
 	protected.POST("/leaderboard/add", leaderboardHandler.AddScore) // test thu cong
 	protected.GET("/leaderboard", leaderboardHandler.GetLeaderboard)
+
+	// start subscribe bang goroutine
+	go notificationService.SubscribeOrderNotifications(ctx)
 
 	// ping
 	r.GET("/ping", func(c *gin.Context) {

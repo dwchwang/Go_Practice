@@ -12,21 +12,23 @@ import (
 )
 
 type OrderService struct {
-	rdb         *redis.Client
-	cartService *CartService
-	leaderboardService *LeaderboardService // order thanh cong -> cong diem
-
+	rdb                 *redis.Client
+	cartService         *CartService
+	leaderboardService  *LeaderboardService  // order thanh cong -> cong diem
+	notificationService *NotificationService // thong bao msg order thanh cong
 }
 
 func NewOrderService(
 	rdb *redis.Client,
 	cartService *CartService,
 	leaderboardService *LeaderboardService,
+	notificationService *NotificationService,
 ) *OrderService {
 	return &OrderService{
-		rdb:         rdb,
-		cartService: cartService,
-		leaderboardService: leaderboardService,
+		rdb:                 rdb,
+		cartService:         cartService,
+		leaderboardService:  leaderboardService,
+		notificationService: notificationService,
 	}
 }
 
@@ -107,13 +109,18 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID string) (*model.O
 
 	// cong 10 diem cho nguoi dung moi khi order thanh cong
 	if err := s.leaderboardService.AddScore(ctx, userID, 10); err != nil {
+		return nil, err
+	}
+
+	// order notification
+	if err := s.notificationService.PublishOrderCreated(ctx, userID); err != nil {
 	return nil, err
 }
 
 	// return order
 	order := &model.Order{
 		UserID: userID,
-		Items: items,
+		Items:  items,
 	}
 
 	return order, nil
