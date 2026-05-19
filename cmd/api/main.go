@@ -35,6 +35,9 @@ func main() {
 
 	cartService := service.NewCartService(rdb)
 	cartHandler := handler.NewCartHandler(cartService)
+	
+	orderService := service.NewOrderService(rdb, cartService)
+	orderHandler := handler.NewOrderHandler(orderService)
 
 	// routes
 	r.POST("/auth/login", authHandler.Login)
@@ -44,7 +47,7 @@ func main() {
 	// middleware
 	protected.Use(middleware.AuthMiddleware(authService))
 	protected.Use(middleware.RateLimitMiddleware(rdb, 10, time.Minute))
-	
+
 	protected.GET("/me", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"user_id": c.GetString("user_id"),
@@ -52,10 +55,13 @@ func main() {
 			"name":    c.GetString("name"),
 		})
 	})
-	
+
 	protected.GET("/products", productHandler.GetProducts)
+
 	protected.POST("/cart/add", cartHandler.AddToCart)
 	protected.GET("/cart", cartHandler.GetCart)
+
+	protected.POST("/order", orderHandler.CreateOrder)
 
 	// ping
 	r.GET("/ping", func(c *gin.Context) {
@@ -77,6 +83,11 @@ func main() {
 			"redis": result,
 		})
 	})
+
+	// demo inventory
+	rdb.Set(ctx, "inventory:p1", 10, 0)
+	rdb.Set(ctx, "inventory:p2", 15, 0)
+	rdb.Set(ctx, "inventory:p3", 5, 0)
 
 	log.Println("Server running at :8080")
 	if err := r.Run(":8080"); err != nil {
