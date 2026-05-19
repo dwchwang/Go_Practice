@@ -5,28 +5,39 @@ import (
 	"errors"
 	"fmt"
 	"mini-ecommerce-redis/internal/model"
+	"mini-ecommerce-redis/internal/repository"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 type OrderService struct {
 	rdb                 *redis.Client
+	db                  *gorm.DB
 	cartService         *CartService
+	productRepo         *repository.ProductRepository
+	orderRepo           *repository.OrderRepository
 	leaderboardService  *LeaderboardService  // order thanh cong -> cong diem
 	notificationService *NotificationService // thong bao msg order thanh cong
 }
 
 func NewOrderService(
 	rdb *redis.Client,
+	db *gorm.DB,
 	cartService *CartService,
+	productRepo *repository.ProductRepository,
+	orderRepo *repository.OrderRepository,
 	leaderboardService *LeaderboardService,
 	notificationService *NotificationService,
 ) *OrderService {
 	return &OrderService{
 		rdb:                 rdb,
+		db:                  db,
 		cartService:         cartService,
+		productRepo:         productRepo,
+		orderRepo:           orderRepo,
 		leaderboardService:  leaderboardService,
 		notificationService: notificationService,
 	}
@@ -70,58 +81,65 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID string) (*model.O
 		return nil, errors.New("cart is empty")
 	}
 
-	// check inventory
-	for _, item := range items {
-		iventoryKey := fmt.Sprintf("inventory:%s", item.ProductID)
+	var createdOrder *model.Order
 
-		stock, err := s.rdb.Get(ctx, iventoryKey).Int64()
-		if err != nil {
-			return nil, err
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var total float64
+		orderItems := make([]model.OrderItem, 0, len(items))
+
+		for _, item := range items {
+			product, err := s.productRepo.FindByIDForUpdate(ctx, tx, item.ProductID)
+			if err != nil {
+				return err
+			}
+
+			if product.Stock < item.Quantity {
+				return fmt.Errorf("insufficient stock for product %s", item.ProductID)
+			}
+
+			total += product.Price * float64(item.Quantity)
+
+			if err := s.productRepo.DecreaseStock(ctx, tx, item.ProductID, item.Quantity); err != nil {
+				return err
+			}
+
+			orderItems = append(orderItems, model.OrderItem{
+				ProductID: item.ProductID,
+				Quantity:  item.Quantity,
+				UnitPrice: product.Price,
+			})
 		}
 
-		if stock < item.Quantity {
-			return nil, fmt.Errorf(
-				"insufficient stock for product %s",
-				item.ProductID,
-			)
+		order := &model.Order{
+			UserID:      userID,
+			Status:      "created",
+			TotalAmount: total,
+			Items:       orderItems,
 		}
-	}
 
-	// decrease inventory
-	for _, item := range items {
-		inventoryKey := fmt.Sprintf("inventory:%s", item.ProductID)
-
-		if err := s.rdb.DecrBy(
-			ctx,
-			inventoryKey,
-			item.Quantity,
-		).Err(); err != nil {
-			return nil, err
+		if err := s.orderRepo.Create(ctx, tx, order); err != nil {
+			return err
 		}
-	}
 
-	// clear cart
-	cartKey := fmt.Sprintf("cart:%s", userID)
+		createdOrder = order
+		return nil
+	})
 
-	if err := s.rdb.Del(ctx, cartKey).Err(); err != nil {
+	if err != nil {
 		return nil, err
 	}
 
-	// cong 10 diem cho nguoi dung moi khi order thanh cong
+	if err := s.cartService.ClearCart(ctx, userID); err != nil {
+		return nil, err
+	}
+
 	if err := s.leaderboardService.AddScore(ctx, userID, 10); err != nil {
 		return nil, err
 	}
 
-	// order notification
 	if err := s.notificationService.PublishOrderCreated(ctx, userID); err != nil {
-	return nil, err
-}
-
-	// return order
-	order := &model.Order{
-		UserID: userID,
-		Items:  items,
+		return nil, err
 	}
 
-	return order, nil
+	return createdOrder, nil
 }

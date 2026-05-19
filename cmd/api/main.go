@@ -3,34 +3,68 @@ package main
 import (
 	"context"
 	"log"
+	"mini-ecommerce-redis/internal/config"
+	"mini-ecommerce-redis/internal/database"
 	"mini-ecommerce-redis/internal/handler"
 	"mini-ecommerce-redis/internal/middleware"
+	"mini-ecommerce-redis/internal/repository"
 	"mini-ecommerce-redis/internal/service"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func main() {
+	cfg := config.Load()
 	ctx := context.Background()
 
+	// connect PostgreSQL
+	db, err := gorm.Open(postgres.Open(cfg.DatabaseDSN), &gorm.Config{})
+	if err != nil {
+		log.Fatal("Postgres connection failed:", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatal("Postgres DB instance failed:", err)
+	}
+	defer sqlDB.Close()
+
+	if err := sqlDB.Ping(); err != nil {
+		log.Fatal("Postgres ping failed:", err)
+	}
+
+	if err := database.AutoMigrate(db); err != nil {
+		log.Fatal("Auto migrate failed:", err)
+	}
+	// seed data
+	if err := database.Seed(db); err != nil {
+		log.Fatal("Seed failed:", err)
+	}
+
+	// connect Redis
 	rdb := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
+		Addr: cfg.RedisAddr,
 	})
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatal("Redis connection failed:", err)
 	}
 
+	// connect gin golang
 	r := gin.Default()
 
 	// DI
-	authService := service.NewAuthService(rdb)
+	userRepo := repository.NewUserRepository(db)
+	authService := service.NewAuthService(rdb, userRepo)
 	authHandler := handler.NewAuthHandler(authService)
 
-	productService := service.NewProductService(rdb)
+	productRepo := repository.NewProductRepository(db)
+	productService := service.NewProductService(rdb, productRepo)
 	productHandler := handler.NewProductHandler(productService)
 
 	cartService := service.NewCartService(rdb)
@@ -41,7 +75,16 @@ func main() {
 
 	notificationService := service.NewNotificationService(rdb)
 
-	orderService := service.NewOrderService(rdb, cartService, leaderboardService, notificationService)
+	orderRepo := repository.NewOrderRepository(db)
+	orderService := service.NewOrderService(
+		rdb,
+		db,
+		cartService,
+		productRepo,
+		orderRepo,
+		leaderboardService,
+		notificationService,
+	)
 	orderHandler := handler.NewOrderHandler(orderService)
 	// routes
 	r.POST("/auth/login", authHandler.Login)
@@ -73,13 +116,36 @@ func main() {
 	// start subscribe bang goroutine
 	go notificationService.SubscribeOrderNotifications(ctx)
 
-	// ping
+	// ping gin
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "pong",
 		})
 	})
 
+	// ping PostgreSQL
+	r.GET("/postgres-ping", func(c *gin.Context) {
+		sqlDB, err := db.DB()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		if err := sqlDB.Ping(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"postgres": "OK",
+		})
+	})
+
+	// ping redis
 	r.GET("/redis-ping", func(c *gin.Context) {
 		result, err := rdb.Ping(c.Request.Context()).Result()
 		if err != nil {
@@ -94,13 +160,8 @@ func main() {
 		})
 	})
 
-	// demo inventory
-	rdb.Set(ctx, "inventory:p1", 10, 0)
-	rdb.Set(ctx, "inventory:p2", 15, 0)
-	rdb.Set(ctx, "inventory:p3", 5, 0)
-
 	log.Println("Server running at :8080")
-	if err := r.Run(":8080"); err != nil {
+	if err := r.Run(cfg.ServerAddr); err != nil {
 		log.Fatal(err)
 	}
 

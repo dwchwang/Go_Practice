@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"mini-ecommerce-redis/internal/store"
+	"mini-ecommerce-redis/internal/repository"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,55 +12,56 @@ import (
 )
 
 type AuthService struct {
-	rdb *redis.Client
+	rdb      *redis.Client
+	userRepo *repository.UserRepository
 }
 
-func NewAuthService(rdb *redis.Client) *AuthService {
+func NewAuthService(rdb *redis.Client, userRepo *repository.UserRepository) *AuthService {
 	return &AuthService{
-		rdb: rdb,
+		rdb:      rdb,
+		userRepo: userRepo,
 	}
 }
 
 type SessionData struct {
 	UserID string
-	Email string
-	Name string
+	Email  string
+	Name   string
 }
 
 // login
-func (s *AuthService) Login(ctx context.Context,email, password string,) (string, error) {
-	user, ok := store.Users[email]
-	if !ok {
-		return "", errors.New("Invalid credentials")
+func (s *AuthService) Login(ctx context.Context, email, password string) (string, error) {
+	user, err := s.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		return "", errors.New("invalid credentials")
 	}
 
-	if user.Password != password {
-		return "", errors.New("Invalid credentials")
+	if user.PasswordHash != password {
+		return "", errors.New("invalid credentials")
 	}
-	
+
 	sessionID := uuid.NewString()
 	sessionKey := fmt.Sprintf("session:%s", sessionID)
-	userSessionKey := fmt.Sprintf("user:%s:sessions",user.ID)
+	userSessionKey := fmt.Sprintf("user:%s:sessions", user.ID)
 
-	// 1. HSet sessionKey => dung pipeline 
+	// 1. HSet sessionKey => dung pipeline
 	pipe := s.rdb.TxPipeline()
 
 	pipe.HSet(ctx, sessionKey, map[string]interface{}{
 		"user_id": user.ID,
-		"email": user.Email,
-		"name": user.Name,
+		"email":   user.Email,
+		"name":    user.Name,
 	})
 	// 2. expire sessionKey
-	pipe.Expire(ctx,sessionKey, 60*time.Minute)
+	pipe.Expire(ctx, sessionKey, 60*time.Minute)
 
 	// 3. SADD userSessionKey sessionID
 	pipe.SAdd(ctx, userSessionKey, sessionID)
 
-	// 4. expire userSessionKey 
+	// 4. expire userSessionKey
 	pipe.Expire(ctx, userSessionKey, 24*time.Hour)
 
-	_, err := pipe.Exec(ctx)
-	if err != nil {
+	if _, err := pipe.Exec(ctx); err != nil {
 		return "", err
 	}
 	return sessionID, nil
@@ -85,7 +86,7 @@ func (s *AuthService) GetSession(ctx context.Context, sessionID string) (*Sessio
 	}
 	return &SessionData{
 		UserID: data["user_id"],
-		Email: data["email"],
-		Name: data["name"],
+		Email:  data["email"],
+		Name:   data["name"],
 	}, nil
 }

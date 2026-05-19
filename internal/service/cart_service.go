@@ -48,3 +48,8 @@ func (s *CartService) GetCart(ctx context.Context, userID string) ([]model.CartI
 	}
 	return items, nil
 }
+
+func (s *CartService) ClearCart(ctx context.Context, userID string) error {
+	cartKey := fmt.Sprintf("cart:%s", userID)
+	return s.rdb.Del(ctx, cartKey).Err()
+}

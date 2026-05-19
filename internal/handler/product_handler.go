@@ -20,6 +20,7 @@ func NewProductHandler(productService *service.ProductService) *ProductHandler {
 
 func (h *ProductHandler) GetProducts(c *gin.Context) {
 	pageStr := c.DefaultQuery("page", "1")
+	limitStr := c.DefaultQuery("limit", "5")
 
 	page, err := strconv.Atoi(pageStr)
 
@@ -30,7 +31,15 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 		return
 	}
 
-	products, cacheHit, err := h.productService.GetProducts(c.Request.Context(), page)
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid limit",
+		})
+		return
+	}
+
+	products, cacheHit, err := h.productService.GetProducts(c.Request.Context(), page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),

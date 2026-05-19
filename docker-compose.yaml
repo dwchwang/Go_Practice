@@ -13,6 +13,18 @@ services:
       --save 60 1
       --loglevel warning
     restart: unless-stopped
-
+  postgres:
+    image: postgres:16
+    container_name: postgres-dev
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ecommerce
+      POSTGRES_PASSWORD: ecommerce
+      POSTGRES_DB: mini_ecommerce
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
 volumes:
   redis-data:
+  postgres-data:

@@ -15,6 +15,8 @@ func AuthMiddleware(authService *service.AuthService) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error": "missing authorization header",
 			})
+			c.Abort()
+			return
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
