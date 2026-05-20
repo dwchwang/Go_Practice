@@ -14,8 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func main() {
@@ -23,10 +21,7 @@ func main() {
 	ctx := context.Background()
 
 	// connect PostgreSQL
-	db, err := gorm.Open(postgres.Open(cfg.DatabaseDSN), &gorm.Config{})
-	if err != nil {
-		log.Fatal("Postgres connection failed:", err)
-	}
+	db := config.ConnectDatabase(cfg)
 
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -38,9 +33,6 @@ func main() {
 		log.Fatal("Postgres ping failed:", err)
 	}
 
-	if err := database.AutoMigrate(db); err != nil {
-		log.Fatal("Auto migrate failed:", err)
-	}
 	// seed data
 	if err := database.Seed(db); err != nil {
 		log.Fatal("Seed failed:", err)
