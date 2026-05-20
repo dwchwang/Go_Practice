@@ -1,440 +1,123 @@
 # Mini E-commerce Redis
 
-Mini e-commerce API viết bằng Go, Gin và Redis. Project mô phỏng các luồng cơ bản của một hệ thống bán hàng nhỏ: đăng nhập, xem sản phẩm, thêm giỏ hàng, tạo đơn hàng, giới hạn request, bảng xếp hạng điểm và thông báo đơn hàng qua Redis Pub/Sub.
+Mini e-commerce API viết bằng Go, Gin, PostgreSQL, GORM và Redis. Project mô phỏng một hệ thống bán hàng nhỏ với đăng nhập, session, cache sản phẩm, giỏ hàng, checkout, quản lý tồn kho, leaderboard, rate limit và notification qua Redis Pub/Sub.
 
 ## Công nghệ sử dụng
 
-- Go
+- Go 1.25
 - Gin Web Framework
-- Redis
+- PostgreSQL 16
+- GORM
+- Redis 8
 - go-redis/v9
 - Docker Compose
 
+## Kiến trúc hiện tại
+
+PostgreSQL là nguồn dữ liệu chính cho các dữ liệu cần lưu bền vững:
+
+- Users
+- Products
+- Product stock
+- Orders
+- Order items
+
+Redis được dùng cho dữ liệu tạm, cache và realtime:
+
+- Session đăng nhập
+- Rate limit theo user
+- Cache danh sách sản phẩm
+- Cart
+- Distributed lock khi checkout theo user
+- Leaderboard
+- Pub/Sub notification khi tạo order
+
 ## Chức năng chính
 
-- Đăng nhập bằng tài khoản demo và lưu session trong Redis.
-- Middleware xác thực bằng `Authorization: Bearer <session_id>`.
-- Rate limit theo user: tối đa 10 request/phút cho các route `/api`.
-- Cache danh sách sản phẩm trong Redis trong 60 giây.
+- Đăng nhập bằng user demo từ PostgreSQL.
+- Lưu session trong Redis và xác thực bằng `Authorization: Bearer <session_id>`.
+- Sliding expiration cho session khi request hợp lệ.
+- Rate limit các route `/api`: tối đa 10 request/phút/user.
+- Lấy danh sách sản phẩm từ PostgreSQL, cache Redis trong 60 giây.
 - Giỏ hàng lưu bằng Redis Hash.
-- Checkout tạo đơn hàng, kiểm tra tồn kho và trừ tồn kho trong Redis.
-- Distributed lock khi tạo đơn để tránh checkout đồng thời cho cùng một user.
+- Checkout tạo order và order items trong PostgreSQL.
+- Kiểm tra và trừ tồn kho bằng PostgreSQL transaction + row lock `FOR UPDATE`.
+- Redis lock theo user để hạn chế checkout đồng thời từ cùng một user.
+- Xóa cart sau khi order commit thành công.
 - Cộng điểm leaderboard sau khi order thành công.
-- Publish/Subscribe notification khi có order mới.
+- Publish notification vào Redis channel `notif:orders`.
 
 ## Cấu trúc thư mục
 
 ```text
 mini-ecommerce-redis/
-├── cmd/api/main.go                  # Entry point, khởi tạo Redis, DI, routes
+├── cmd/api/main.go                  # Entry point, DI, routes, connect Redis/PostgreSQL
+├── internal/config/                 # Load env, connect PostgreSQL bằng GORM
+├── internal/database/               # AutoMigrate và seed dữ liệu demo
 ├── internal/handler/                # HTTP handlers
 ├── internal/middleware/             # Auth middleware, rate limit middleware
-├── internal/model/                  # Struct model
-├── internal/service/                # Business logic dùng Redis
-├── internal/store/mock.go           # Mock users và products
-├── docker-compose.yaml              # Redis service
+├── internal/model/                  # GORM models và response models
+├── internal/repository/             # Repository layer thao tác PostgreSQL
+├── internal/service/                # Business logic dùng Redis/PostgreSQL
+├── docker-compose.yaml              # Redis và PostgreSQL
 ├── go.mod
 └── go.sum
 ```
 
-## Luồng hệ thống
 
-### 1. Authentication
 
-Client gọi `POST /auth/login` với email và password. Nếu hợp lệ, hệ thống tạo `session_id`, lưu thông tin user vào Redis Hash và trả session cho client.
-
-Redis keys:
-
-```text
-session:<session_id>       # Hash: user_id, email, name
-user:<user_id>:sessions    # Set: danh sách session_id của user
-```
-
-Session ban đầu hết hạn sau 60 phút. Khi request hợp lệ đi qua auth middleware, session được gia hạn theo sliding expiration 30 phút.
-
-Tài khoản demo:
-
-```text
-email: demo@example.com
-password: 123456
-```
-
-### 2. Product cache
-
-Route `GET /api/products?page=1` lấy danh sách product. Lần đầu cache miss thì đọc từ mock store, marshal JSON và lưu Redis trong 60 giây. Các lần sau đọc từ Redis.
-
-Redis key:
-
-```text
-cache:products:page:<page>
-```
-
-### 3. Cart
-
-Giỏ hàng dùng Redis Hash, trong đó field là `product_id`, value là số lượng.
-
-Redis key:
-
-```text
-cart:<user_id>
-```
-
-Khi gọi `POST /api/cart/add`, hệ thống dùng `HINCRBY` để tăng số lượng sản phẩm trong giỏ.
-
-### 4. Order
-
-Khi gọi `POST /api/order`, hệ thống thực hiện:
-
-1. Tạo distributed lock theo user bằng `SETNX lock:order:<user_id>`.
-2. Lấy cart từ Redis.
-3. Kiểm tra tồn kho từng sản phẩm.
-4. Trừ tồn kho bằng `DECRBY`.
-5. Xóa cart sau khi checkout thành công.
-6. Cộng 10 điểm vào leaderboard.
-7. Publish message vào channel notification.
-8. Release lock bằng Lua script để đảm bảo chỉ xóa đúng lock do request hiện tại tạo.
-
-Redis keys:
-
-```text
-lock:order:<user_id>
-inventory:<product_id>
-leaderboard
-notif:orders
-```
-
-Inventory demo được seed khi server start:
-
-```text
-inventory:p1 = 10
-inventory:p2 = 15
-inventory:p3 = 5
-```
-
-### 5. Leaderboard
-
-Leaderboard dùng Redis Sorted Set. Mỗi order thành công cộng 10 điểm cho user.
-
-Redis key:
-
-```text
-leaderboard
-```
-
-### 6. Notification
-
-Khi order thành công, service publish message vào Redis channel `notif:orders`. Server cũng subscribe channel này bằng goroutine và log notification ra console.
-
-## Chạy project
-
-### 1. Chạy Redis
-
-```bash
-docker compose up -d
-```
-
-Redis chạy tại:
-
-```text
-localhost:6379
-```
-
-### 2. Chạy API
-
-```bash
-go run ./cmd/api
-```
-
-Server chạy tại:
-
-```text
-http://localhost:8080
-```
-
-### 3. Kiểm tra health
-
-```bash
-curl http://localhost:8080/ping
-```
-
-Response:
-
-```json
-{
-  "message": "pong"
-}
-```
-
-Kiểm tra Redis:
-
-```bash
-curl http://localhost:8080/redis-ping
-```
-
-Response:
-
-```json
-{
-  "redis": "PONG"
-}
-```
-
-## API endpoints
-
-### Login
-
-```http
-POST /auth/login
-Content-Type: application/json
-```
-
-Request:
-
-```json
-{
-  "email": "demo@example.com",
-  "password": "123456"
-}
-```
-
-Response:
-
-```json
-{
-  "session_id": "<session_id>",
-  "token_type": "Bearer"
-}
-```
-
-Các API dưới đây cần header:
-
-```http
-Authorization: Bearer <session_id>
-```
-
-### Lấy thông tin user hiện tại
-
-```http
-GET /api/me
-```
-
-Response:
-
-```json
-{
-  "user_id": "1",
-  "email": "demo@example.com",
-  "name": "Demo User"
-}
-```
-
-### Lấy danh sách sản phẩm
-
-```http
-GET /api/products?page=1
-```
-
-Response:
-
-```json
-{
-  "cache_hit": false,
-  "data": [
-    {
-      "id": "p1",
-      "name": "iPhone 15",
-      "description": "Apple smartphone",
-      "price": 999,
-      "stock": 10,
-      "category": "phone"
-    }
-  ],
-  "page": 1
-}
-```
-
-### Thêm sản phẩm vào giỏ hàng
-
-```http
-POST /api/cart/add
-Content-Type: application/json
-Authorization: Bearer <session_id>
-```
-
-Request:
-
-```json
-{
-  "product_id": "p1",
-  "quantity": 2
-}
-```
-
-Response:
-
-```json
-{
-  "message": "product added to cart"
-}
-```
-
-### Xem giỏ hàng
-
-```http
-GET /api/cart
-Authorization: Bearer <session_id>
-```
-
-Response:
-
-```json
-{
-  "items": [
-    {
-      "product_id": "p1",
-      "quantity": 2
-    }
-  ]
-}
-```
-
-### Tạo đơn hàng
-
-```http
-POST /api/order
-Authorization: Bearer <session_id>
-```
-
-Response:
-
-```json
-{
-  "message": "order created",
-  "order": {
-    "user_id": "1",
-    "items": [
-      {
-        "product_id": "p1",
-        "quantity": 2
-      }
-    ]
-  }
-}
-```
-
-### Cộng điểm leaderboard thủ công
-
-```http
-POST /api/leaderboard/add
-Content-Type: application/json
-Authorization: Bearer <session_id>
-```
-
-Request:
-
-```json
-{
-  "score": 5
-}
-```
-
-Response:
-
-```json
-{
-  "message": "score added"
-}
-```
-
-### Xem leaderboard
-
-```http
-GET /api/leaderboard?limit=10
-Authorization: Bearer <session_id>
-```
-
-Response:
-
-```json
-{
-  "items": [
-    {
-      "user_id": "1",
-      "score": 10,
-      "rank": 1
-    }
-  ]
-}
-```
-
-## Ví dụ test nhanh bằng curl
-
-Login:
-
-```bash
-curl -X POST http://localhost:8080/auth/login \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"demo@example.com\",\"password\":\"123456\"}"
-```
-
-Gán session vào biến môi trường:
-
-```bash
-export TOKEN="<session_id>"
-```
-
-Windows PowerShell:
-
-```powershell
-$env:TOKEN = "<session_id>"
-```
-
-Lấy products:
-
-```bash
-curl http://localhost:8080/api/products?page=1 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Thêm vào cart:
-
-```bash
-curl -X POST http://localhost:8080/api/cart/add \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d "{\"product_id\":\"p1\",\"quantity\":2}"
-```
-
-Tạo order:
-
-```bash
-curl -X POST http://localhost:8080/api/order \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Xem leaderboard:
-
-```bash
-curl http://localhost:8080/api/leaderboard?limit=10 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-## Redis data structure đang dùng
+## Redis keys đang dùng
 
 | Tính năng | Redis structure | Key |
 | --- | --- | --- |
 | Session | Hash | `session:<session_id>` |
 | User sessions | Set | `user:<user_id>:sessions` |
-| Product cache | String | `cache:products:page:<page>` |
+| Rate limit | String counter | `rl:<user_id>:<window>` |
+| Product cache | String JSON | `cache:products:page:<page>:limit:<limit>` |
 | Cart | Hash | `cart:<user_id>` |
-| Inventory | String number | `inventory:<product_id>` |
 | Order lock | String | `lock:order:<user_id>` |
 | Leaderboard | Sorted Set | `leaderboard` |
 | Notification | Pub/Sub Channel | `notif:orders` |
 
-## Ghi chú hiện tại
+## PostgreSQL tables
 
-- Product data và user data đang là mock trong `internal/store/mock.go`.
-- Tham số `page` của products hiện được dùng để tạo cache key, chưa phân trang dữ liệu thực tế.
-- Inventory được set lại khi server khởi động.
-- Project hiện chưa có database chính; Redis đang được dùng cho session, cache, cart, inventory demo, lock, leaderboard và pub/sub.
+GORM AutoMigrate tạo các bảng chính:
+
+| Table | Vai trò |
+| --- | --- |
+| `users` | Tài khoản người dùng |
+| `products` | Danh sách sản phẩm và tồn kho |
+| `orders` | Đơn hàng |
+| `order_items` | Chi tiết sản phẩm trong đơn hàng |
+
+
+## Luồng checkout
+
+Khi gọi `POST /api/order`, hệ thống thực hiện:
+
+1. Tạo Redis lock `lock:order:<user_id>` bằng `SETNX`.
+2. Lấy cart từ Redis Hash `cart:<user_id>`.
+3. Mở PostgreSQL transaction.
+4. Với từng sản phẩm trong cart, lock row product bằng `FOR UPDATE`.
+5. Kiểm tra stock và trừ stock trong cùng transaction.
+6. Tạo order và order items trong PostgreSQL.
+7. Commit transaction.
+8. Xóa cart trong Redis.
+9. Cộng 10 điểm vào Redis Sorted Set `leaderboard`.
+10. Publish message vào Redis channel `notif:orders`.
+11. Release Redis lock bằng Lua script để chỉ xóa đúng lock của request hiện tại.
+
+## Kiến thức Redis áp dụng
+
+- `Hash`: lưu session data tại `session:<session_id>` và cart tại `cart:<user_id>`.
+- `Set`: lưu danh sách session của user tại `user:<user_id>:sessions`.
+- `String`: lưu product cache dạng JSON tại `cache:products:page:<page>:limit:<limit>`.
+- `String counter`: làm rate limit theo user tại `rl:<user_id>:<window>`.
+- `Sorted Set`: làm leaderboard tại key `leaderboard`.
+- `Pub/Sub`: gửi notification khi tạo order qua channel `notif:orders`.
+- `TTL`: tự động hết hạn session, product cache, rate limit counter và order lock.
+- `Cache-aside pattern`: đọc Redis trước, cache miss thì query PostgreSQL rồi ghi lại Redis.
+- `Atomic increment`: dùng `HINCRBY` để tăng số lượng sản phẩm trong cart và `INCR` cho rate limit.
+- `Distributed lock`: dùng `SETNX` cho `lock:order:<user_id>` để hạn chế checkout trùng.
+- `Lua script`: release lock an toàn, chỉ xóa lock nếu đúng request đang giữ lock.
+- `Pipeline`: gom các lệnh tạo session như `HSET`, `EXPIRE`, `SADD` để giảm round-trip tới Redis.
