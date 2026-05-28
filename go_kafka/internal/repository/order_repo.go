@@ -34,7 +34,9 @@ func (r *OrderRepository) Create(ctx context.Context, order *domain.Order) error
 // Nếu insert outbox fail -> rollback.
 // Nếu cả hai thành công -> commit.
 func (r *OrderRepository) CreateWithOutbox(ctx context.Context, order *domain.Order) error {
+	outboxID := uuid.New()
 	payload, err := json.Marshal(domain.OrderCreatedEvent{
+		EventID:   outboxID.String(),
 		OrderID:   order.ID.String(),
 		UserID:    order.UserID,
 		ProductID: order.ProductID,
@@ -45,7 +47,7 @@ func (r *OrderRepository) CreateWithOutbox(ctx context.Context, order *domain.Or
 	}
 
 	outboxEvent := &domain.OutboxEvent{
-		ID:          uuid.New(),
+		ID:          outboxID,
 		AggregateID: order.ID.String(),
 		EventType:   domain.EventTypeOrderCreated,
 		Payload:     datatypes.JSON(payload),

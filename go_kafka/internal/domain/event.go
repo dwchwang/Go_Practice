@@ -6,6 +6,7 @@ const (
 )
 
 type OrderCreatedEvent struct {
+	EventID   string  `json:"event_id"`
 	OrderID   string  `json:"order_id"`
 	UserID    string  `json:"user_id"`
 	ProductID string  `json:"product_id"`
@@ -13,6 +14,7 @@ type OrderCreatedEvent struct {
 }
 
 type PaymentProcessedEvent struct {
+	EventID string `json:"event_id"`
 	OrderID string `json:"order_id"`
 	UserID  string `json:"user_id"`
 	Success bool   `json:"success"`

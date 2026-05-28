@@ -15,6 +15,8 @@ import (
 	"order-processing/internal/service"
 )
 
+const paymentConsumerGroup = "payment-service-group"
+
 func main() {
 	cfg := config.Load()
 
@@ -39,6 +41,7 @@ func main() {
 	defer redisCache.Close()
 
 	orderRepo := repository.NewOrderRepository(db)
+	processedRepo := repository.NewProcessedMessageRepository(db)
 
 	producer := appkafka.NewProducer(cfg.KafkaBrokers)
 	defer func() {
@@ -49,14 +52,16 @@ func main() {
 
 	paymentService := service.NewPaymentService(
 		orderRepo,
+		processedRepo,
 		redisCache,
 		producer,
+		paymentConsumerGroup,
 	)
 
 	consumer := appkafka.NewConsumer(
 		cfg.KafkaBrokers,
 		appkafka.TopicOrderCreated,
-		"payment-service-group",
+		paymentConsumerGroup,
 		appkafka.TopicOrderCreatedDLQ,
 	)
 	defer func() {

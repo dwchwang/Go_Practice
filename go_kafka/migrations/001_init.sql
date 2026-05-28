@@ -21,6 +21,20 @@ CREATE TABLE IF NOT EXISTS outbox (
     sent_at        TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS processed_messages (
+    message_id     VARCHAR(150) NOT NULL,
+    consumer_group VARCHAR(150) NOT NULL,
+    topic          VARCHAR(255) NOT NULL,
+    partition      INT NOT NULL,
+    offset_value   BIGINT NOT NULL,
+    processed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (message_id, consumer_group)
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_messages_consumer_group
+ON processed_messages(consumer_group);
+
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
 
 CREATE INDEX IF NOT EXISTS idx_outbox_status

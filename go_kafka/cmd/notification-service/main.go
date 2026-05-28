@@ -8,9 +8,13 @@ import (
 	"syscall"
 
 	"order-processing/internal/config"
+	"order-processing/internal/database"
 	appkafka "order-processing/internal/kafka"
+	"order-processing/internal/repository"
 	"order-processing/internal/service"
 )
+
+const notificationConsumerGroup = "notification-service-group"
 
 func main() {
 	cfg := config.Load()
@@ -18,12 +22,28 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	notificationService := service.NewNotificationService()
+	db, err := database.NewPostgres(cfg.PostgresDSN)
+	if err != nil {
+		log.Fatal("[NotificationService] connect postgres error:", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatal("[NotificationService] get sql db error:", err)
+	}
+	defer sqlDB.Close()
+
+	processedRepo := repository.NewProcessedMessageRepository(db)
+
+	notificationService := service.NewNotificationService(
+		processedRepo,
+		notificationConsumerGroup,
+	)
 
 	consumer := appkafka.NewConsumer(
 		cfg.KafkaBrokers,
 		appkafka.TopicOrderPaymentProcessed,
-		"notification-service-group",
+		notificationConsumerGroup,
 		appkafka.TopicOrderPaymentProcessedDLQ,
 	)
 	defer func() {
