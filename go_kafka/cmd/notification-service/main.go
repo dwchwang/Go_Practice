@@ -24,6 +24,7 @@ func main() {
 		cfg.KafkaBrokers,
 		appkafka.TopicOrderPaymentProcessed,
 		"notification-service-group",
+		appkafka.TopicOrderPaymentProcessedDLQ,
 	)
 	defer func() {
 		if err := consumer.Close(); err != nil {

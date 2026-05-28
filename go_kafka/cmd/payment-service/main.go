@@ -57,6 +57,7 @@ func main() {
 		cfg.KafkaBrokers,
 		appkafka.TopicOrderCreated,
 		"payment-service-group",
+		appkafka.TopicOrderCreatedDLQ,
 	)
 	defer func() {
 		if err := consumer.Close(); err != nil {

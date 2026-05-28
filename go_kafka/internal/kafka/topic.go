@@ -3,6 +3,9 @@ package kafka
 const (
 	TopicOrderCreated          = "order.created"
 	TopicOrderPaymentProcessed = "order.payment.processed"
+
+	TopicOrderCreatedDLQ          = "order.created.DLQ"
+	TopicOrderPaymentProcessedDLQ = "order.payment.processed.DLQ"
 )
 
 type TopicDefinition struct {
@@ -20,6 +23,16 @@ func DefaultTopics() []TopicDefinition {
 		},
 		{
 			Name:              TopicOrderPaymentProcessed,
+			Partitions:        3,
+			ReplicationFactor: 1,
+		},
+		{
+			Name:              TopicOrderCreatedDLQ,
+			Partitions:        3,
+			ReplicationFactor: 1,
+		},
+		{
+			Name:              TopicOrderPaymentProcessedDLQ,
 			Partitions:        3,
 			ReplicationFactor: 1,
 		},
