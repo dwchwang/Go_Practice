@@ -83,3 +83,20 @@ func (r *OrderRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Or
 
 	return &order, nil
 }
+
+func (r *OrderRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.OrderStatus) error {
+	result := r.db.WithContext(ctx).
+		Model(&domain.Order{}).
+		Where("id = ?", id).
+		Update("status", status)
+
+	if result.Error != nil {
+		return fmt.Errorf("update order status: %w", result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+
+	return nil
+}
