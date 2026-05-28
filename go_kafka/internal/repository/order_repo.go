@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"order-processing/internal/domain"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -22,6 +24,49 @@ func NewOrderRepository(db *gorm.DB) *OrderRepository {
 func (r *OrderRepository) Create(ctx context.Context, order *domain.Order) error {
 	if err := r.db.WithContext(ctx).Create(order).Error; err != nil {
 		return fmt.Errorf("create order: %w", err)
+	}
+
+	return nil
+}
+
+// CreateWithOutbox ghi order + outbox event trong cùng 1 transaction.
+// Nếu insert order fail -> rollback.
+// Nếu insert outbox fail -> rollback.
+// Nếu cả hai thành công -> commit.
+func (r *OrderRepository) CreateWithOutbox(ctx context.Context, order *domain.Order) error {
+	payload, err := json.Marshal(domain.OrderCreatedEvent{
+		OrderID:   order.ID.String(),
+		UserID:    order.UserID,
+		ProductID: order.ProductID,
+		Amount:    order.Amount,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal order created event: %w", err)
+	}
+
+	outboxEvent := &domain.OutboxEvent{
+		ID:          uuid.New(),
+		AggregateID: order.ID.String(),
+		EventType:   domain.EventTypeOrderCreated,
+		Payload:     datatypes.JSON(payload),
+		Status:      domain.OutboxStatusPending,
+		RetryCount:  0,
+	}
+
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(order).Error; err != nil {
+			return fmt.Errorf("insert order: %w", err)
+		}
+
+		if err := tx.Create(outboxEvent).Error; err != nil {
+			return fmt.Errorf("insert outbox event: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("create order with outbox: %w", err)
 	}
 
 	return nil

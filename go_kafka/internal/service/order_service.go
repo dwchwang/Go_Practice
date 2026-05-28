@@ -46,8 +46,10 @@ func (s *OrderService) CreateOrder(ctx context.Context, input CreateOrderInput) 
 		Status:    domain.StatusPending,
 	}
 
-	if err := s.orderRepo.Create(ctx, order); err != nil {
-		return nil, fmt.Errorf("create order: %w", err)
+	// Không chỉ insert orders nữa.
+	// Bây giờ insert orders + outbox trong cùng transaction.
+	if err := s.orderRepo.CreateWithOutbox(ctx, order); err != nil {
+		return nil, fmt.Errorf("create order with outbox: %w", err)
 	}
 
 	// Cache lỗi không nên làm fail request.
