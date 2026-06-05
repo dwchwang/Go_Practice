@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strings"
+	"sync"
 )
 
 type Config struct {
@@ -12,7 +13,20 @@ type Config struct {
 	KafkaBrokers []string
 }
 
-func Load() *Config {
+var (
+	instance *Config
+	once     sync.Once
+)
+
+// Get trả về instance Config duy nhất trong toàn process, thread-safe nhờ sync.Once.
+func Get() *Config {
+	once.Do(func() {
+		instance = load()
+	})
+	return instance
+}
+
+func load() *Config {
 	return &Config{
 		PostgresDSN: getEnv(
 			"POSTGRES_DSN",

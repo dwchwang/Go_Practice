@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg := config.Get()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

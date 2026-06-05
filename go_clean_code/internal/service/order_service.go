@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-	"order-processing/internal/cache"
+
 	"order-processing/internal/domain"
-	"order-processing/internal/repository"
+	"order-processing/internal/domain/ports"
 
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -25,15 +23,15 @@ type CreateOrderInput struct {
 	Amount    float64
 }
 
+// OrderService xử lý business logic cho order. Cache được xử lý bởi Proxy (CachedOrderRepository),
+// service chỉ gọi OrderStore interface và không biết cache tồn tại.
 type OrderService struct {
-	orderRepo  *repository.OrderRepository
-	redisCache *cache.RedisCache
+	orderStore ports.OrderStore
 }
 
-func NewOrderService(orderRepo *repository.OrderRepository, redisCache *cache.RedisCache) *OrderService {
+func NewOrderService(orderStore ports.OrderStore) *OrderService {
 	return &OrderService{
-		orderRepo:  orderRepo,
-		redisCache: redisCache,
+		orderStore: orderStore,
 	}
 }
 
@@ -46,16 +44,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, input CreateOrderInput) 
 		Status:    domain.StatusPending,
 	}
 
-	// Không chỉ insert orders nữa.
-	// Bây giờ insert orders + outbox trong cùng transaction.
-	if err := s.orderRepo.CreateWithOutbox(ctx, order); err != nil {
+	// Proxy (CachedOrderRepository) xử lý insert + outbox + cache trong 1 lần gọi.
+	if err := s.orderStore.CreateWithOutbox(ctx, order); err != nil {
 		return nil, fmt.Errorf("create order with outbox: %w", err)
-	}
-
-	// Cache lỗi không nên làm fail request.
-	// Source of truth vẫn là PostgreSQL.
-	if err := s.redisCache.SetOrder(ctx, order); err != nil {
-		log.Printf("[OrderService] set redis cache error: %v", err)
 	}
 
 	return order, nil
@@ -67,33 +58,14 @@ func (s *OrderService) GetOrderByID(ctx context.Context, idStr string) (*domain.
 		return nil, ErrInvalidOrderID
 	}
 
-	// 1. Đọc Redis trước
-	order, err := s.redisCache.GetOrder(ctx, id.String())
-	if err == nil {
-		log.Printf("[OrderService] Cache HIT order_id=%s", id.String())
-		return order, nil
-	}
-
-	// Redis không có key thì là cache miss, không phải lỗi nghiêm trọng.
-	if !errors.Is(err, redis.Nil) {
-		log.Printf("[OrderService] redis get error: %v", err)
-	}
-
-	log.Printf("[OrderService] Cache MISS order_id=%s", id.String())
-
-	// 2. Cache miss -> đọc PostgreSQL
-	order, err = s.orderRepo.GetByID(ctx, id)
+	// Proxy (CachedOrderRepository) xử lý cache-aside trong suốt.
+	order, err := s.orderStore.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrOrderNotFound
 		}
 
 		return nil, fmt.Errorf("get order from db: %w", err)
-	}
-
-	// 3. Warm cache lại Redis
-	if err := s.redisCache.SetOrder(ctx, order); err != nil {
-		log.Printf("[OrderService] warm redis cache error: %v", err)
 	}
 
 	return order, nil

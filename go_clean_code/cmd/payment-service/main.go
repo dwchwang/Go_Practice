@@ -18,7 +18,7 @@ import (
 const paymentConsumerGroup = "payment-service-group"
 
 func main() {
-	cfg := config.Load()
+	cfg := config.Get()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -40,7 +40,8 @@ func main() {
 	}
 	defer redisCache.Close()
 
-	orderRepo := repository.NewOrderRepository(db)
+	dbRepo := repository.NewOrderRepository(db)
+	orderRepo := repository.NewCachedOrderRepository(dbRepo, redisCache)
 	processedRepo := repository.NewProcessedMessageRepository(db)
 
 	producer := appkafka.NewProducer(cfg.KafkaBrokers)
@@ -53,7 +54,6 @@ func main() {
 	paymentService := service.NewPaymentService(
 		orderRepo,
 		processedRepo,
-		redisCache,
 		producer,
 		paymentConsumerGroup,
 	)

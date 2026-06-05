@@ -8,38 +8,34 @@ import (
 	"math/rand"
 	"time"
 
-	"order-processing/internal/cache"
 	"order-processing/internal/domain"
+	"order-processing/internal/domain/ports"
 	appkafka "order-processing/internal/kafka"
-	"order-processing/internal/repository"
 
 	"github.com/google/uuid"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
 type PaymentService struct {
-	orderRepo       *repository.OrderRepository
-	processedRepo   *repository.ProcessedMessageRepository
-	redisCache      *cache.RedisCache
-	producer        *appkafka.Producer
-	consumerGroup   string
-	rng             *rand.Rand
+	orderStore     ports.OrderStore
+	processedStore ports.ProcessedMessageStore
+	eventPublisher ports.EventPublisher
+	consumerGroup  string
+	rng            *rand.Rand
 }
 
 func NewPaymentService(
-	orderRepo *repository.OrderRepository,
-	processedRepo *repository.ProcessedMessageRepository,
-	redisCache *cache.RedisCache,
-	producer *appkafka.Producer,
+	orderStore ports.OrderStore,
+	processedStore ports.ProcessedMessageStore,
+	eventPublisher ports.EventPublisher,
 	consumerGroup string,
 ) *PaymentService {
 	return &PaymentService{
-		orderRepo:     orderRepo,
-		processedRepo: processedRepo,
-		redisCache:    redisCache,
-		producer:      producer,
-		consumerGroup: consumerGroup,
-		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		orderStore:     orderStore,
+		processedStore: processedStore,
+		eventPublisher: eventPublisher,
+		consumerGroup:  consumerGroup,
+		rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -55,7 +51,7 @@ func (s *PaymentService) HandleOrderCreated(ctx context.Context, msg kafkago.Mes
 		messageID = fallbackMessageID(msg)
 	}
 
-	processed, err := s.processedRepo.IsProcessed(ctx, messageID, s.consumerGroup)
+	processed, err := s.processedStore.IsProcessed(ctx, messageID, s.consumerGroup)
 	if err != nil {
 		return err
 	}
@@ -89,18 +85,11 @@ func (s *PaymentService) HandleOrderCreated(ctx context.Context, msg kafkago.Mes
 		newStatus = domain.StatusCancelled
 	}
 
-	if err := s.orderRepo.UpdateStatus(ctx, orderID, newStatus); err != nil {
+	if err := s.orderStore.UpdateStatus(ctx, orderID, newStatus); err != nil {
 		return fmt.Errorf("update order status: %w", err)
 	}
 
-	updatedOrder, err := s.orderRepo.GetByID(ctx, orderID)
-	if err != nil {
-		return fmt.Errorf("get updated order: %w", err)
-	}
-
-	if err := s.redisCache.SetOrder(ctx, updatedOrder); err != nil {
-		log.Printf("[PaymentService] update redis cache error: %v", err)
-	}
+	// Proxy (CachedOrderRepository) đã tự động warm cache sau UpdateStatus.
 
 	paymentEvent := domain.PaymentProcessedEvent{
 		EventID: messageID + ":payment-processed",
@@ -109,7 +98,7 @@ func (s *PaymentService) HandleOrderCreated(ctx context.Context, msg kafkago.Mes
 		Success: success,
 	}
 
-	if err := s.producer.PublishEvent(
+	if err := s.eventPublisher.PublishEvent(
 		ctx,
 		appkafka.TopicOrderPaymentProcessed,
 		event.OrderID,
@@ -118,7 +107,7 @@ func (s *PaymentService) HandleOrderCreated(ctx context.Context, msg kafkago.Mes
 		return fmt.Errorf("publish PaymentProcessedEvent: %w", err)
 	}
 
-	if err := s.processedRepo.MarkProcessed(ctx, domain.ProcessedMessage{
+	if err := s.processedStore.MarkProcessed(ctx, domain.ProcessedMessage{
 		MessageID:     messageID,
 		ConsumerGroup: s.consumerGroup,
 		Topic:         msg.Topic,
@@ -137,6 +126,4 @@ func (s *PaymentService) HandleOrderCreated(ctx context.Context, msg kafkago.Mes
 	return nil
 }
 
-func fallbackMessageID(msg kafkago.Message) string {
-	return fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)
-}
+// fallbackMessageID đã được chuyển sang util.go

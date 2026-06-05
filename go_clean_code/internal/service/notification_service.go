@@ -5,26 +5,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"time"
 
 	"order-processing/internal/domain"
-	"order-processing/internal/repository"
+	"order-processing/internal/domain/ports"
+	"order-processing/internal/factory/notification"
 
 	kafkago "github.com/segmentio/kafka-go"
 )
 
 type NotificationService struct {
-	processedRepo *repository.ProcessedMessageRepository
-	consumerGroup string
+	processedStore ports.ProcessedMessageStore
+	factory        notification.NotificationFactory
+	consumerGroup  string
 }
 
 func NewNotificationService(
-	processedRepo *repository.ProcessedMessageRepository,
+	processedStore ports.ProcessedMessageStore,
+	factory notification.NotificationFactory,
 	consumerGroup string,
 ) *NotificationService {
 	return &NotificationService{
-		processedRepo: processedRepo,
-		consumerGroup: consumerGroup,
+		processedStore: processedStore,
+		factory:        factory,
+		consumerGroup:  consumerGroup,
 	}
 }
 
@@ -40,7 +43,7 @@ func (s *NotificationService) HandlePaymentProcessed(ctx context.Context, msg ka
 		messageID = fallbackMessageID(msg)
 	}
 
-	processed, err := s.processedRepo.IsProcessed(ctx, messageID, s.consumerGroup)
+	processed, err := s.processedStore.IsProcessed(ctx, messageID, s.consumerGroup)
 	if err != nil {
 		return err
 	}
@@ -62,11 +65,18 @@ func (s *NotificationService) HandlePaymentProcessed(ctx context.Context, msg ka
 		event.Success,
 	)
 
-	if err := s.simulateSendNotification(ctx, event); err != nil {
-		return err
+	// Abstract Factory: tạo Formatter + Sender từ factory (không biết Email hay Console)
+	formatter := s.factory.CreateFormatter()
+	sender := s.factory.CreateSender()
+
+	content := formatter.Format(event)
+	if err := sender.Send(ctx, event.UserID, content); err != nil {
+		log.Printf("[NotificationService] sender error (non-fatal): %v", err)
+		// Không return error — sender thất bại không nên chặn pipeline.
+		// Vẫn MarkProcessed để tránh Kafka retry vô hạn.
 	}
 
-	if err := s.processedRepo.MarkProcessed(ctx, domain.ProcessedMessage{
+	if err := s.processedStore.MarkProcessed(ctx, domain.ProcessedMessage{
 		MessageID:     messageID,
 		ConsumerGroup: s.consumerGroup,
 		Topic:         msg.Topic,
@@ -75,36 +85,6 @@ func (s *NotificationService) HandlePaymentProcessed(ctx context.Context, msg ka
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (s *NotificationService) simulateSendNotification(
-	ctx context.Context,
-	event domain.PaymentProcessedEvent,
-) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	if event.Success {
-		log.Printf(
-			"[NotificationService] EMAIL SENT: user=%s order=%s payment success, order confirmed",
-			event.UserID,
-			event.OrderID,
-		)
-
-		return nil
-	}
-
-	log.Printf(
-		"[NotificationService] EMAIL SENT: user=%s order=%s payment failed, please try again",
-		event.UserID,
-		event.OrderID,
-	)
 
 	return nil
 }

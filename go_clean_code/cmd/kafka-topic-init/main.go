@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg := config.Get()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

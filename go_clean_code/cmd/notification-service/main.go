@@ -9,6 +9,7 @@ import (
 
 	"order-processing/internal/config"
 	"order-processing/internal/database"
+	"order-processing/internal/factory/notification"
 	appkafka "order-processing/internal/kafka"
 	"order-processing/internal/repository"
 	"order-processing/internal/service"
@@ -17,7 +18,7 @@ import (
 const notificationConsumerGroup = "notification-service-group"
 
 func main() {
-	cfg := config.Load()
+	cfg := config.Get()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -35,8 +36,12 @@ func main() {
 
 	processedRepo := repository.NewProcessedMessageRepository(db)
 
+	// Abstract Factory: chọn kênh thông báo (Email hoặc Console)
+	notifFactory := &notification.EmailNotificationFactory{}
+
 	notificationService := service.NewNotificationService(
 		processedRepo,
+		notifFactory,
 		notificationConsumerGroup,
 	)
 

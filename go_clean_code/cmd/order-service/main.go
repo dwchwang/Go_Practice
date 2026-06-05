@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg := config.Get()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -44,8 +44,9 @@ func main() {
 	defer redisCache.Close()
 
 	//order
-	orderRepo := repository.NewOrderRepository(db)
-	orderService := service.NewOrderService(orderRepo, redisCache)
+	dbRepo := repository.NewOrderRepository(db)
+	orderRepo := repository.NewCachedOrderRepository(dbRepo, redisCache)
+	orderService := service.NewOrderService(orderRepo)
 	orderHandler := handler.NewOrderHandler(orderService)
 
 	router := gin.Default()

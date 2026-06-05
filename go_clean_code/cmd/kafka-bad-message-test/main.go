@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg := config.Get()
 
 	producer := appkafka.NewProducer(cfg.KafkaBrokers)
 	defer func() {
