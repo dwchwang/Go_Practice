@@ -46,7 +46,7 @@ func (m *mockSender) Send(ctx context.Context, userID string, content string) er
 // --- Mock processed message store ---
 
 type mockNotifProcessedStore struct {
-	isProcessedFunc  func(ctx context.Context, messageID, consumerGroup string) (bool, error)
+	isProcessedFunc   func(ctx context.Context, messageID, consumerGroup string) (bool, error)
 	markProcessedFunc func(ctx context.Context, msg domain.ProcessedMessage) error
 }
 

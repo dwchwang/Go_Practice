@@ -213,4 +213,3 @@ func TestCachedOrderRepo_GetByID_NonExistent(t *testing.T) {
 		t.Error("expected error for non-existent order")
 	}
 }
-

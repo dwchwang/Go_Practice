@@ -32,7 +32,7 @@ func (m *mockOrderStore) UpdateStatus(ctx context.Context, id uuid.UUID, status 
 }
 
 type mockProcessedMessageStore struct {
-	isProcessedFunc  func(ctx context.Context, messageID, consumerGroup string) (bool, error)
+	isProcessedFunc   func(ctx context.Context, messageID, consumerGroup string) (bool, error)
 	markProcessedFunc func(ctx context.Context, msg domain.ProcessedMessage) error
 }
 

@@ -16,8 +16,8 @@ import (
 // xử lý cache-aside trong suốt. Service chỉ gọi ports.OrderStore interface,
 // không biết cache tồn tại.
 type CachedOrderRepository struct {
-	dbRepo *OrderRepository  // Real Subject — DB access
-	cache  ports.OrderCache  // Redis (interface)
+	dbRepo *OrderRepository // Real Subject — DB access
+	cache  ports.OrderCache // Redis (interface)
 }
 
 func NewCachedOrderRepository(dbRepo *OrderRepository, cache ports.OrderCache) *CachedOrderRepository {
